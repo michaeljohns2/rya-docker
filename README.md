@@ -1,5 +1,5 @@
 # rya-docker
-Docker adaptated from Rya VagrantFile [example](https://github.com/apache/incubator-rya/tree/master/extras/vagrantExample/src/main/vagrant).
+Docker quickstart adaptated from Rya VagrantFile [example](https://github.com/apache/incubator-rya/tree/master/extras/vagrantExample/src/main/vagrant).
 
 See [vagrant readme](https://github.com/apache/incubator-rya/blob/master/extras/vagrantExample/src/main/vagrant/readme.md) for more background and usage tips.
 
@@ -15,7 +15,7 @@ See [vagrant readme](https://github.com/apache/incubator-rya/blob/master/extras/
 * if you `docker exec` into the running container, you may want to `source ${ACCUMULO_RC}` which should resolve to '${APP_ROOT}/.accumulo_rc.sh' (_APP_ROOT is /opt_)
 
 ## Stopping
-* Since dirs 'app_root' and 'webapps' are persistend between runs, it is best to shutdown cleanly. To do so, run the following from within the container: `./opt/stop_services.sh`
+* Since dirs 'app_root' and 'webapps' are persistend between runs, it is best to shutdown cleanly. To do so, run the following from within the container: `.${APP_ROOT}/stop_services.sh`
 * then exit the container, may see `Are you sure? this will kill the container. use Ctrl + p, Ctrl + q to detach or ctrl + d to exit`
 
 
