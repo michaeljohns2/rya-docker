@@ -19,8 +19,8 @@
 # <<<NOTES>>>
 # Use the -v command in docker run to supply the following for continuity between runs, see `docker-run.sh`, e.g.:
 #     (1) APP_ROOT
-#     (2) /data/accumulo
-#     (3) /var/lib/tomcat7/webapps/
+#     (2) /data/accumulo (may cause issues between runs)
+#     (3) ${CATALINA_BASE}/webapps/
 #
 # You can ignore 'FATAL: It appears the directories [...] were previously initialized.'
 # Also, you may see an indefinitely repeating: 'Waiting for accumulo to be initialized' which means Accumulo won't start."
