@@ -1,0 +1,338 @@
+#! /usr/bin/env bash
+#set -eo pipefail
+
+# Builds a single node Rya on Accumulo on Hadoop and Zookeeper.
+# Deploys Rya, and the Sesame openrdf-workbench on Tomcat accessable from the host's browser.
+# See the readme at  at <https://github.com/apache/incubator-rya/blob/master/extras/vagrantExample/src/main/vagrant/readme.md> for URL's, verification, and troubleshooting.
+# 
+# hostname : rya-example-box <<< vagrant-setup same >>>
+# ip : dynamic <<< vagrant setup was 192.168.33.10>>>
+# most apps are in ${APP_ROOT}, e.g. '/opt' <<< vagrant setup was /home/vagrant >>>
+# tomcat is in '/usr/local/tomcat', i.e. CATALINA_HOME with webapps in /var/lib/tomcat, i.e. CATALINA_BASE
+# user: root <<< vagrant setup was 'vagrant' >>>
+# password: <docker managed> <<< vagrant setup was 'vagrant' >>>
+#
+# accumulo instance : dev
+# accumulo username : root
+# accumulo password : root
+#
+# <<<NOTES>>>
+# Use the -v command in docker run to supply the following for continuity between runs, see `docker-run.sh`, e.g.:
+#     (1) APP_ROOT
+#     (2) /data/accumulo
+#     (3) /var/lib/tomcat7/webapps/
+#
+# You can ignore 'FATAL: It appears the directories [...] were previously initialized.'
+# Also, you may see an indefinitely repeating: 'Waiting for accumulo to be initialized' which means Accumulo won't start."
+# Either issue can be resolved by removing the directory: 'sudo rm -r /data/accumulo' then restart. Warning: this will erase all Rya/Accumulo data."
+
+#Override the exit command to prevent accidental container distruction 
+echo 'alias exit="echo Are you sure? this will kill the container. use Ctrl + p, Ctrl + q to detach or ctrl + d to exit"' > ~/.bashrc
+
+function echoerr() { printf "%s\n" "$*" >&2; }
+
+function doExit {
+    if [ $? -ne 0 ]; then
+         echoerr "--------------------------"
+         echoerr "-"
+         echoerr "- failed" "$@"
+         echoerr "-"
+         echoerr "- exiting..."
+         echoerr "-"
+         echoerr "--------------------------"
+         exit 800
+    fi
+    # otherwise exit normally
+    exit
+}
+
+# chmod for custom stop services script (if it was provided)
+if [ -f ${APP_ROOT}/stop_services.sh ]; then
+    chmod +x ${APP_ROOT}/stop_services.sh
+fi
+
+# add to support tomcat
+
+# need catalina_base ./temp and ./webapps dirs
+mkdir -p ${CATALINA_BASE}/temp
+mkdir -p ${CATALINA_BASE}/webapps
+mkdir -p ${CATALINA_BASE}/logs
+touch ${CATALINA_BASE}/catalina.out
+
+export WEBAPPS_DIR=${CATALINA_BASE}/webapps
+
+# used to manage creation of admin
+mkdir -p ${CATALINA_HOME}/scripts
+
+# shell environment includes Accumulo resources.
+export ACCUMULO_RC=${APP_ROOT}/.accumulo_rc.sh
+
+    cat > ${ACCUMULO_RC} <<EOF
+
+        export JAVA_HOME="$JAVA_HOME"
+        export HADOOP_HOME="$HADOOP_HOME"
+        export ZOOKEEPER_HOME="$ZOOKEEPER_HOME"
+        export ZOO_LOG_DIR="$ZOO_LOG_DIR"
+        export ACCUMULO_HOME="$ACCUMULO_HOME"
+        export PATH="$PATH:$PATHADD"
+
+        export HADOOP_PREFIX="$HADOOP_PREFIX"
+        export HADOOP_CONF_DIR="$HADOOP_CONF_DIR"
+        export ACCUMULO_LOG_DIR="$ACCUMULO_LOG_DIR"
+        export ACCUMULO_TSERVER_OPTS="$ACCUMULO_TSERVER_OPTS"
+        export ACCUMULO_MASTER_OPTS="$ACCUMULO_MASTER_OPTS"
+        export ACCUMULO_MONITOR_OPTS="$ACCUMULO_MONITOR_OPTS"
+        export ACCUMULO_GC_OPTS="$ACCUMULO_GC_OPTS"
+        export ACCUMULO_GENERAL_OPTS="$ACCUMULO_GENERAL_OPTS"
+        export ACCUMULO_OTHER_OPTS="$ACCUMULO_OTHER_OPTS"
+        export ACCUMULO_KILL_CMD="$ACCUMULO_KILL_CMD"
+        
+        ### command lists 7 java processes: tomcat-catalina, zookeeper, and 5 Accumulo: tracer, master, monitor, tserver, gc.
+        function ryaps() { ps -ef | grep java | tr ' ' '\\n' | egrep '^org\\.apache|^tracer|^master|^monitor|^tserver|^gc' | sed '/\\.Main/ N ; s/\\n/ /' ; }
+EOF
+
+source ${ACCUMULO_RC} || doExit 151
+
+echo "Acquiring and Extracting ..."
+
+function download {
+    ### curl --fail treat http status >= 400 as an error. --location follow redirects status>=300
+    curl --silent --show-error --fail --location "$@"
+    if [ $? -ne 0 ]; then
+         echoerr "--------------------------"
+         echoerr "-"
+         echoerr "- download failed" "$@"
+         echoerr "-"
+         echoerr "- exiting ..."
+         echoerr "-"
+         echoerr "--------------------------"
+         doExit 800
+    fi
+}
+
+### wait for a directory to exist or 60 seconds timeout
+function waitForDeploy {
+    waitfordir="$1"
+    timeout=60
+    while [[ ! -d  "$waitfordir" ]]  
+    do
+        sleep 5
+        let timeout-=5
+        if [[ $timeout -le "0" ]]; then 
+            echo "Timeout waiting for war to deploy, $waitfordir still does not exist."; 
+            doExit 401 
+        fi
+    done
+}
+    
+echo "- Hadoop (check installed)"
+hadoopUrl=http://apache.mirrors.tds.net/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz
+if [[ ! -d ${HADOOP_HOME} ]] ; then 
+    echo "Downloading $hadoopUrl"
+    download $hadoopUrl \
+    | tar -zxC ${APP_ROOT} || doExit 101
+fi
+
+echo "- Zookeeper (check installed)"
+zookeeperUrl=http://archive-primary.cloudera.com/cdh4/cdh/4/zookeeper-${ZOOKEEPER_VERSION}.tar.gz
+if [[ ! -d ${ZOOKEEPER_HOME} ]] ; then
+    echo "Downloading $zookeeperUrl"
+    download $zookeeperUrl \
+    | tar -zxC ${APP_ROOT} || doExit 102
+fi
+
+echo "- Accumulo (check installed)"
+accumuloUrl=http://apache.mirrors.pair.com/accumulo/${ACCUMULO_VERSION}/accumulo-${ACCUMULO_VERSION}-bin.tar.gz
+if [[ ! -d ${ACCUMULO_HOME} ]] ; then
+    echo "Downloading $accumuloUrl"
+    download $accumuloUrl \
+    | tar -zxC ${APP_ROOT} || doExit 103
+fi
+
+echo "Configuring Zookeeper..."
+mkdir -p /var/zookeeper
+cp ${ZOOKEEPER_HOME}/conf/zoo_sample.cfg ${ZOOKEEPER_HOME}/conf/zoo.cfg
+# ORIG: Change the dataDir to /var/zookeeper -- strange that backslashes need to be escaped only on this line.
+#sudo sed -i 's/^\\s*dataDir\\s*=.*$/dataDir=\\/var\\/zookeeper/' ${ZOOKEEPER_HOME}/conf/zoo.cfg  || doExit 104
+# MLJ: fixing the ORIG sed to work within docker (or whatever else was going on)
+sed "s/dataDir=.*/dataDir=\\/var\\/zookeeper/g" ${ZOOKEEPER_HOME}/conf/zoo.cfg > /tmp/zoo.cfg || doExit 104
+mv /tmp/zoo.cfg ${ZOOKEEPER_HOME}/conf || doExit 105
+
+# Conflicts with Accumulo and maybe Zookeeper
+rm -f ${HADOOP_HOME}/share/hadoop/common/lib/slf4j-api-1.7.10.jar
+rm -f ${HADOOP_HOME}/share/hadoop/common/lib/slf4j-log4j12-1.7.10.jar
+
+# Assure logs are creatable and writeable
+mkdir -p ${ZOO_LOG_DIR}
+touch "${ZOO_LOG_DIR}/zookeeper.out"
+chmod -R a+wX  ${ZOO_LOG_DIR}
+
+echo "Running Zookeeper..."
+${ZOOKEEPER_HOME}/bin/zkServer.sh start
+    
+echo "Configuring Accumulo..."
+cp ${ACCUMULO_HOME}/conf/examples/1GB/standalone/* ${ACCUMULO_HOME}/conf/
+rm -f ${ACCUMULO_HOME}/conf/accumulo-site.xml
+cat >> ${ACCUMULO_HOME}/conf/accumulo-site.xml <<EOF
+       <configuration>
+           <property><name>instance.dfs.uri</name><value>file:///</value></property>
+           <property><name>instance.dfs.dir</name><value>/data/accumulo</value></property>
+           <property><name>instance.zookeeper.host</name><value>localhost:2181</value></property>
+           <property><name>instance.secret</name><value>DONTTELL</value></property>
+           <property><name>tserver.port.search</name><value>true</value></property>
+           <property><name>logger.dir.walog</name><value>/data/accumulo/walogs</value></property>
+           <property><name>tserver.cache.data.size</name><value>15M</value></property>
+           <property><name>tserver.cache.index.size</name><value>15M</value></property>
+           <property><name>tserver.memory.maps.max</name><value>256M</value></property>
+           <property><name>tserver.walog.max.size</name><value>256M</value></property>
+           <property><name>tserver.memory.maps.native.enabled</name><value>false</value></property>
+           <property><name>trace.token.property.password</name><value>root</value></property>
+           <property><name>gc.cycle.delay</name><value>4s</value></property>
+           <property><name>gc.cycle.start</name><value>0s</value></property>
+           <property><name>tserver.compaction.major.delay</name><value>3</value></property>
+           <property><name>general.classpaths</name><value>
+           /data/accumulo/lib/[^.].*.jar,
+           ${HADOOP_HOME}/share/hadoop/common/.*.jar,
+           ${HADOOP_HOME}/share/hadoop/common/lib/.*.jar,
+           ${HADOOP_HOME}/share/hadoop/hdfs/.*.jar,
+           ${HADOOP_HOME}/share/hadoop/mapreduce/.*.jar,
+           ${HADOOP_HOME}/share/hadoop/yarn/.*.jar,
+           ${ACCUMULO_HOME}/server/target/classes/,
+           ${ACCUMULO_HOME}/lib/accumulo-server.jar,
+           ${ACCUMULO_HOME}/core/target/classes/,
+           ${ACCUMULO_HOME}/lib/accumulo-core.jar,
+           ${ACCUMULO_HOME}/start/target/classes/,
+           ${ACCUMULO_HOME}/lib/accumulo-start.jar,
+           ${ACCUMULO_HOME}/fate/target/classes/,
+           ${ACCUMULO_HOME}/lib/accumulo-fate.jar,
+           ${ACCUMULO_HOME}/proxy/target/classes/,
+           ${ACCUMULO_HOME}/lib/accumulo-proxy.jar,
+           ${ACCUMULO_HOME}/lib/[^.].*.jar,
+           ${ZOOKEEPER_HOME}/zookeeper[^.].*.jar,
+           $HADOOP_CONF_DIR,
+           ${HADOOP_HOME}/[^.].*.jar,
+           ${HADOOP_HOME}/lib/[^.].*.jar,
+           </value></property>
+           <property><name>general.dynamic.classpaths</name><value>/data/accumulo/lib/ext/[^.].*.jar</value></property>
+           <property><name>trace.port.client</name><value>0</value></property>
+           <property><name>monitor.port.client</name><value>0</value></property>
+           <property><name>master.port.client</name><value>0</value></property>
+           <property><name>tserver.port.client</name><value>0</value></property>
+           <property><name>gc.port.client</name><value>0</value></property>
+      </configuration>
+EOF
+cat > ${ACCUMULO_HOME}/conf/masters <<EOF
+rya-example-box
+EOF
+cat > ${ACCUMULO_HOME}/conf/slaves <<EOF
+rya-example-box
+EOF
+mkdir -p /data
+mkdir -p /data/accumulo/lib/ext
+chmod -R a+rwX ${ACCUMULO_HOME}/logs/
+
+echo "Starting Accumulo..."
+${ACCUMULO_HOME}/bin/accumulo init --instance-name dev --password root
+${ACCUMULO_HOME}/bin/start-all.sh  || doExit 107
+chmod -R a+rwX ${ACCUMULO_HOME}/logs/
+echo '... Accumulo Started!'
+
+echo "Installing Sesame Server"
+# creating log dir sesame-http-server-${SESAME_VERSION}
+mkdir -p ${CATALINA_HOME}/.aduna/openrdf-sesame/logs
+# THIS LINE IS PROBLEMMATIC (added /openrdf-sesame)
+#ln -f -s ${CATALINA_HOME}/.aduna/openrdf-sesame ${WEBAPPS_DIR}/openrdf-sesame
+sesamewar=${WEBAPPS_DIR}/openrdf-sesame.war
+if [[ ! -s $sesamewar ]] ; then 
+    echo "Downloading"
+    download --output $sesamewar http://repo1.maven.org/maven2/org/openrdf/sesame/sesame-http-server/${SESAME_VERSION}/sesame-http-server-${SESAME_VERSION}.war || doExit 110
+fi
+echo "Sesame http server deployed at http://rya-example-box:8080/openrdf-sesame"
+
+echo "Installing Sesame Workbench"
+workbench=${WEBAPPS_DIR}/openrdf-workbench.war
+if [[ ! -s $workbench ]] ; then 
+    echo "Downloading"
+    download --output $workbench http://repo1.maven.org/maven2/org/openrdf/sesame/sesame-http-workbench/${SESAME_VERSION}/sesame-http-workbench-${SESAME_VERSION}.war || doExit 111
+fi
+echo "Sesame workbench deployed at http://rya-example-box:8080/openrdf-workbench"
+
+echo "Installing Rya"
+ryaIndexing=rya.indexing.example-${RYA_EXAMPLE_VERSION}-distribution
+if [[ ! -s ${APP_ROOT}/${ryaIndexing}.zip ]] ; then
+    # Right now it's on dropbox, but eventually it'll be on maven...
+    echo "Downloading quietly, this will take some minutes with no output..."
+    download --output ${APP_ROOT}/${ryaIndexing}.zip https://dl.dropbox.com/s/7e74yiuq4jmu0od/${ryaIndexing}.zip?raw=1 || doExit 112
+fi
+unzip -q -o ${APP_ROOT}/${ryaIndexing}.zip -d ${APP_ROOT}/${ryaIndexing}
+
+# Start Tomcat
+${CATALINA_HOME}/bin/catalina.sh start
+
+echo "...waiting for Tomcat to deploy workbench"
+# before continuing, wait for tomcat to deploy wars:
+waitForDeploy ${WEBAPPS_DIR}/openrdf-workbench/WEB-INF/lib/
+waitForDeploy ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/
+
+# soft linking the files doesn't seem to work in tomcat, so we copy them instead :(
+cp ${APP_ROOT}/${ryaIndexing}/dist/lib/* ${WEBAPPS_DIR}/openrdf-workbench/WEB-INF/lib/ || doExit 113
+cp ${APP_ROOT}/${ryaIndexing}/dist/lib/* ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/    || doExit 114
+
+# These are older libs that breaks tomcat 7
+rm -f ${WEBAPPS_DIR}/openrdf-workbench/WEB-INF/lib/servlet-api-2.5*.jar
+rm -f ${WEBAPPS_DIR}/openrdf-workbench/WEB-INF/lib/jsp-api-2.1*.jar
+rm -f ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/servlet-api-2.5*.jar
+rm -f ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/jsp-api-2.1*.jar
+
+#chown -R ${TOMCAT_USER}:${TOMCAT_GROUP} ${WEBAPPS_DIR}/openrdf-workbench/WEB-INF/lib/
+#chown -R ${TOMCAT_USER}:${TOMCAT_GROUP} ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/
+
+echo "Downloading and installing new templates for OpenRdf WorkBench"
+ryaVagrant=rya.vagrant.example-${RYA_EXAMPLE_VERSION}
+if [[ ! -s ${APP_ROOT}/${ryaVagrant}.jar ]] ; then
+    echo "Downloading"
+    download --output ${APP_ROOT}/${ryaVagrant}.jar  https://dl.dropbox.com/s/dgw63m66nubyy4z/${ryaVagrant}.jar?raw=1 || doExit 120
+fi
+unzip -q -o ${APP_ROOT}/${ryaVagrant}.jar -d ${APP_ROOT}/${ryaVagrant}
+cp ${APP_ROOT}/${ryaVagrant}/*.xsl ${WEBAPPS_DIR}/openrdf-workbench/transformations/
+#chown ${TOMCAT_USER}:${TOMCAT_GROUP} ${WEBAPPS_DIR}/openrdf-workbench/transformations/*
+
+echo "Deploying Rya Web"
+ryaWar=web.rya-${RYA_EXAMPLE_VERSION}.war
+if [[ ! -s ${APP_ROOT}/${ryaWar} ]] ; then
+    echo "Downloading"
+    download https://dl.dropbox.com/s/332wr4b2f34dp6e/${ryaWar}?raw=1 --output ${APP_ROOT}/${ryaWar} || doExit 121
+fi
+unzip -q -o ${APP_ROOT}/${ryaWar}.zip -d ${APP_ROOT}/${ryaWar}
+cp ${APP_ROOT}/${ryaWar} ${WEBAPPS_DIR}/web.rya.war
+
+echo "...waiting for Tomcat to deploy web.rya"
+# Wait for the war to deploy
+waitForDeploy ${WEBAPPS_DIR}/web.rya/WEB-INF/classes/
+
+# These are older libs that breaks tomcat 7 (added `*` to catch-all)
+rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/javax.servlet-3.1*.jar
+rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/javax.servlet-api-3.0*.jar
+rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/servlet-api-2.5*.jar
+rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/jsp-api-2.1*.jar
+
+echo "Modify Rya Web Config"
+cat > ${WEBAPPS_DIR}/web.rya/WEB-INF/classes/environment.properties <<EOF
+instance.name=dev
+instance.zk=localhost:2181
+instance.username=root
+instance.password=root
+rya.tableprefix=rya_
+rya.displayqueryplan=true
+EOF
+
+echo "Rya web deployed at http://rya-example-box:8080/web.rya/sparqlQuery.jsp"
+
+# restart tomcat
+${CATALINA_HOME}/bin/catalina.sh restart
+
+echo "Finished and ready to use!"
+
+#Run bash to keep container running and provide interactive mode
+bash
+
