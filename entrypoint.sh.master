@@ -8,7 +8,7 @@
 # hostname : rya-example-box <<< vagrant-setup same >>>
 # ip : dynamic <<< vagrant setup was 192.168.33.10>>>
 # most apps are in ${APP_ROOT}, e.g. '/opt' <<< vagrant setup was /home/vagrant >>>
-# tomcat is in '/usr/local/tomcat', i.e. CATALINA_HOME with webapps in /var/lib/tomcat, i.e. CATALINA_BASE
+# tomcat home is CATALINA_HOME (and CATALINA_BASE) e.g. '/usr/local/tomcat', with webapps in './webapps'
 # user: root <<< vagrant setup was 'vagrant' >>>
 # password: <docker managed> <<< vagrant setup was 'vagrant' >>>
 #
