@@ -22,6 +22,6 @@ See [vagrant readme](https://github.com/apache/incubator-rya/blob/master/extras/
 * 'docker-run.sh' supports mounting a host controlled git repo for 'incubator-rya' (assumes peer)
 * from within the container can run `./build.rya.sh` to build the install the latest artifacts to '.m2' mounted through to the host from 'docker-run.sh'
   * may need to run `./m2_chown.sh` to retake ownership of additions from within the container (after container is stopped)
-* run `./deploy_rya.sh` to update tomcat (while running) with the latest web.rya, handling the same setup steps as in 'entrypoint.sh.master'
+* run `./deploy_rya.sh` within '$SOURCE_ROOT' (resolves to '/usr/local/src') to update tomcat (while running) with the latest web.rya, handling the same setup steps as in 'entrypoint.sh.master'
 
 
