@@ -15,7 +15,13 @@ See [vagrant readme](https://github.com/apache/incubator-rya/blob/master/extras/
 * if you `docker exec` into the running container, you may want to `source ${ACCUMULO_RC}` which should resolve to '${APP_ROOT}/.accumulo_rc.sh' (_APP_ROOT is /opt_)
 
 ## Stopping
-* Since dirs 'app_root' and 'webapps' are persistend between runs, it is best to shutdown cleanly. To do so, run the following from within the container: `.${APP_ROOT}/stop_services.sh`
-* then exit the container, may see `Are you sure? this will kill the container. use Ctrl + p, Ctrl + q to detach or ctrl + d to exit`
+* since dirs 'app_root' and 'webapps' are persistend between runs, it is best to shutdown cleanly. To do so, run the following from within the container: `.${APP_ROOT}/stop_services.sh`
+* then exit the container, may see `Are you sure? this will kill the container. use Ctrl+p, Ctrl+q to detach or Ctrl+d to exit`
+
+## Update and Deploy Rya
+* 'docker-run.sh' supports mounting a host controlled git repo for 'incubator-rya' (assumes peer)
+* from within the container can run `./build.rya.sh` to build the install the latest artifacts to '.m2' mounted through to the host from 'docker-run.sh'
+  * may need to run `./m2_chown.sh` to retake ownership of additions from within the container (after container is stopped)
+* run `./deploy_rya.sh` to update tomcat (while running) with the latest web.rya, handling the same setup steps as in 'entrypoint.sh.master'
 
 
