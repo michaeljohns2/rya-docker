@@ -1,4 +1,4 @@
-#! /usr/bin/env bash
+#!/bin/bash
 #set -eo pipefail
 
 # Builds a single node Rya on Accumulo on Hadoop and Zookeeper.
@@ -17,7 +17,7 @@
 # accumulo password : root
 #
 # <<<NOTES>>>
-# Use the -v command in docker run to supply the following for continuity between runs, see `docker-run.sh`, e.g.:
+# Use the -v command in docker run to supply the following for continuity between runs, see 'docker-run.sh', e.g.:
 #     (1) APP_ROOT
 #     (2) /data/accumulo (may cause issues between runs)
 #     (3) ${CATALINA_BASE}/webapps/
@@ -27,7 +27,7 @@
 # Either issue can be resolved by removing the directory: 'sudo rm -r /data/accumulo' then restart. Warning: this will erase all Rya/Accumulo data."
 
 #Override the exit command to prevent accidental container distruction 
-echo 'alias exit="echo Are you sure? this will kill the container. use Ctrl + p, Ctrl + q to detach or ctrl + d to exit"' > ~/.bashrc
+echo 'alias exit="echo Are you sure? this will kill the container. use Ctrl+p, Ctrl+q to detach or Ctrl+d to exit"' > ~/.bashrc
 
 function echoerr() { printf "%s\n" "$*" >&2; }
 
@@ -46,9 +46,27 @@ function doExit {
     exit
 }
 
-# chmod for custom stop services script (if it was provided)
+# chmod execute for custom stop and restart services scripts (if it provided)
 if [ -f ${APP_ROOT}/stop_services.sh ]; then
     chmod +x ${APP_ROOT}/stop_services.sh
+fi
+if [ -f ${APP_ROOT}/restart_services.sh ]; then
+    chmod +x ${APP_ROOT}/restart_services.sh
+fi
+
+export SOURCE_ROOT=/usr/local/src
+
+# chmod execute for custom build and deploy scripts (if it provided)
+if [ -f ${SOURCE_ROOT}/build_rya.sh ]; then
+    chmod +x ${SOURCE_ROOT}/build_rya.sh
+fi
+
+if [ -f ${SOURCE_ROOT}/deploy_rya.sh ]; then
+    chmod +x ${SOURCE_ROOT}/deploy_rya.sh
+fi
+
+if [ -f ${SOURCE_ROOT}/remove_rya_conflicts.sh ]; then
+    chmod +x ${SOURCE_ROOT}/remove_rya_conflicts.sh
 fi
 
 # add to support tomcat
@@ -67,7 +85,8 @@ mkdir -p ${CATALINA_HOME}/scripts
 # shell environment includes Accumulo resources.
 export ACCUMULO_RC=${APP_ROOT}/.accumulo_rc.sh
 
-    cat > ${ACCUMULO_RC} <<EOF
+cat > ${ACCUMULO_RC} <<EOF
+#!/bin/bash
 
         export JAVA_HOME="$JAVA_HOME"
         export HADOOP_HOME="$HADOOP_HOME"
@@ -86,7 +105,12 @@ export ACCUMULO_RC=${APP_ROOT}/.accumulo_rc.sh
         export ACCUMULO_GENERAL_OPTS="$ACCUMULO_GENERAL_OPTS"
         export ACCUMULO_OTHER_OPTS="$ACCUMULO_OTHER_OPTS"
         export ACCUMULO_KILL_CMD="$ACCUMULO_KILL_CMD"
-        
+
+        export APP_ROOT="$APP_ROOT"
+        export SOURCE_ROOT="$SOURCE_ROOT"
+        export WEBAPPS_DIR="$WEBAPPS_DIR"
+        export ACCUMULO_RC="$ACCUMULO_RC"
+
         ### command lists 7 java processes: tomcat-catalina, zookeeper, and 5 Accumulo: tracer, master, monitor, tserver, gc.
         function ryaps() { ps -ef | grep java | tr ' ' '\\n' | egrep '^org\\.apache|^tracer|^master|^monitor|^tserver|^gc' | sed '/\\.Main/ N ; s/\\n/ /' ; }
 EOF
@@ -128,7 +152,7 @@ function waitForDeploy {
 echo "- Hadoop (check installed)"
 hadoopUrl=http://apache.mirrors.tds.net/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz
 if [[ ! -d ${HADOOP_HOME} ]] ; then 
-    echo "Downloading $hadoopUrl"
+    echo "...downloading $hadoopUrl"
     download $hadoopUrl \
     | tar -zxC ${APP_ROOT} || doExit 101
 fi
@@ -136,7 +160,7 @@ fi
 echo "- Zookeeper (check installed)"
 zookeeperUrl=http://archive-primary.cloudera.com/cdh4/cdh/4/zookeeper-${ZOOKEEPER_VERSION}.tar.gz
 if [[ ! -d ${ZOOKEEPER_HOME} ]] ; then
-    echo "Downloading $zookeeperUrl"
+    echo "...downloading $zookeeperUrl"
     download $zookeeperUrl \
     | tar -zxC ${APP_ROOT} || doExit 102
 fi
@@ -144,7 +168,7 @@ fi
 echo "- Accumulo (check installed)"
 accumuloUrl=http://apache.mirrors.pair.com/accumulo/${ACCUMULO_VERSION}/accumulo-${ACCUMULO_VERSION}-bin.tar.gz
 if [[ ! -d ${ACCUMULO_HOME} ]] ; then
-    echo "Downloading $accumuloUrl"
+    echo "...downloading $accumuloUrl"
     download $accumuloUrl \
     | tar -zxC ${APP_ROOT} || doExit 103
 fi
@@ -244,24 +268,24 @@ mkdir -p ${CATALINA_HOME}/.aduna/openrdf-sesame/logs
 #ln -f -s ${CATALINA_HOME}/.aduna/openrdf-sesame ${WEBAPPS_DIR}/openrdf-sesame
 sesamewar=${WEBAPPS_DIR}/openrdf-sesame.war
 if [[ ! -s $sesamewar ]] ; then 
-    echo "Downloading"
+    echo "... downloading openrdf-sesame war"
     download --output $sesamewar http://repo1.maven.org/maven2/org/openrdf/sesame/sesame-http-server/${SESAME_VERSION}/sesame-http-server-${SESAME_VERSION}.war || doExit 110
 fi
-echo "Sesame http server deployed at http://rya-example-box:8080/openrdf-sesame"
+echo "Sesame http server accessible from host at http://localhost:8080/openrdf-sesame"
 
 echo "Installing Sesame Workbench"
 workbench=${WEBAPPS_DIR}/openrdf-workbench.war
 if [[ ! -s $workbench ]] ; then 
-    echo "Downloading"
+    echo "...downloading openrdf-workbench war"
     download --output $workbench http://repo1.maven.org/maven2/org/openrdf/sesame/sesame-http-workbench/${SESAME_VERSION}/sesame-http-workbench-${SESAME_VERSION}.war || doExit 111
 fi
-echo "Sesame workbench deployed at http://rya-example-box:8080/openrdf-workbench"
+echo "Sesame workbench accessible from host at http://localhost:8080/openrdf-workbench"
 
 echo "Installing Rya"
 ryaIndexing=rya.indexing.example-${RYA_EXAMPLE_VERSION}-distribution
 if [[ ! -s ${APP_ROOT}/${ryaIndexing}.zip ]] ; then
     # Right now it's on dropbox, but eventually it'll be on maven...
-    echo "Downloading quietly, this will take some minutes with no output..."
+    echo "...downloading $ryaIndexing quietly, this will take some minutes with no output..."
     download --output ${APP_ROOT}/${ryaIndexing}.zip https://dl.dropbox.com/s/7e74yiuq4jmu0od/${ryaIndexing}.zip?raw=1 || doExit 112
 fi
 unzip -q -o ${APP_ROOT}/${ryaIndexing}.zip -d ${APP_ROOT}/${ryaIndexing}
@@ -290,7 +314,7 @@ rm -f ${WEBAPPS_DIR}/openrdf-sesame/WEB-INF/lib/jsp-api-2.1*.jar
 echo "Downloading and installing new templates for OpenRdf WorkBench"
 ryaVagrant=rya.vagrant.example-${RYA_EXAMPLE_VERSION}
 if [[ ! -s ${APP_ROOT}/${ryaVagrant}.jar ]] ; then
-    echo "Downloading"
+    echo "...downloading $ryaVagrant jar"
     download --output ${APP_ROOT}/${ryaVagrant}.jar  https://dl.dropbox.com/s/dgw63m66nubyy4z/${ryaVagrant}.jar?raw=1 || doExit 120
 fi
 unzip -q -o ${APP_ROOT}/${ryaVagrant}.jar -d ${APP_ROOT}/${ryaVagrant}
@@ -300,23 +324,34 @@ cp ${APP_ROOT}/${ryaVagrant}/*.xsl ${WEBAPPS_DIR}/openrdf-workbench/transformati
 echo "Deploying Rya Web"
 ryaWar=web.rya-${RYA_EXAMPLE_VERSION}.war
 if [[ ! -s ${APP_ROOT}/${ryaWar} ]] ; then
-    echo "Downloading"
+    echo "...downloading $ryaWar zip"
     download https://dl.dropbox.com/s/332wr4b2f34dp6e/${ryaWar}?raw=1 --output ${APP_ROOT}/${ryaWar} || doExit 121
 fi
-unzip -q -o ${APP_ROOT}/${ryaWar}.zip -d ${APP_ROOT}/${ryaWar}
+
+if [ -f ${APP_ROOT}/${ryaWar}.zip ]; then
+    echo "...unzipping $ryaWar.zip"
+    unzip -q -o ${APP_ROOT}/${ryaWar}.zip -d ${APP_ROOT}/${ryaWar}
+fi
+
+if [ -d ${WEBAPPS_DIR}/web.rya ]; then
+    echo "...removing existing web.rya dir"
+    rm -rf ${WEBAPPS_DIR}/web.rya
+fi
+
 cp ${APP_ROOT}/${ryaWar} ${WEBAPPS_DIR}/web.rya.war
 
 echo "...waiting for Tomcat to deploy web.rya"
 # Wait for the war to deploy
 waitForDeploy ${WEBAPPS_DIR}/web.rya/WEB-INF/classes/
 
-# These are older libs that breaks tomcat 7 (added `*` to catch-all)
+echo "...removing conflicting rya.web jars after deploy"
+# These are older libs that breaks tomcat 7 (added '*' to catch-all)
 rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/javax.servlet-3.1*.jar
 rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/javax.servlet-api-3.0*.jar
 rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/servlet-api-2.5*.jar
 rm -f ${WEBAPPS_DIR}/web.rya/WEB-INF/lib/jsp-api-2.1*.jar
 
-echo "Modify Rya Web Config"
+echo "...modifying rya web config (environment.properties)"
 cat > ${WEBAPPS_DIR}/web.rya/WEB-INF/classes/environment.properties <<EOF
 instance.name=dev
 instance.zk=localhost:2181
@@ -326,10 +361,7 @@ rya.tableprefix=rya_
 rya.displayqueryplan=true
 EOF
 
-echo "Rya web deployed at http://rya-example-box:8080/web.rya/sparqlQuery.jsp"
-
-# restart tomcat
-${CATALINA_HOME}/bin/catalina.sh restart
+echo "Rya web accessible from host at http://localhost:8080/web.rya/sparqlQuery.jsp"
 
 echo "Finished and ready to use!"
 
